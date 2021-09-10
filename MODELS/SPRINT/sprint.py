@@ -66,7 +66,7 @@ parser.add_argument('-neg', '--negative_testing_file', help='File contaiing spac
 parser.add_argument('-o', '--output_file', help='Name used for saving files', type=str, nargs='?', default='output.txt')
 parser.add_argument('-e', '--entire_proteome', help='Flag for performing entire proteome (all-to-all) prediction', action='store_true')
 # Additional arguements and options for easily performing cross-validation
-parser.add_argument('-s', '--sprint', help='Full path to SPRINT location (can be omitted if SPRINT is in same directory)', type=str, nargs='?', default=os.getcwd()+'/bin/')
+parser.add_argument('-s', '--sprint', help='Full path to SPRINT location (can be omitted if SPRINT is in same directory)', type=str, nargs='?', default=os.getcwd()+'/')
 parser.add_argument('-file', help='Full path to labelled PPI dataset in (.tsv file, no header, using labels 0 (neg) and 1 (pos))', type=str)
 parser.add_argument('-k', '--kfolds', help='Number of k-fold splits for cross-validation (default 5)', type=int, default=5)
 parser.add_argument('-r', '--results', help='Path to directory for saving dataset files', 
@@ -174,7 +174,6 @@ def predict_interactions(sprint_location, protein_sequences, hsp_filename, thc=4
         result = subprocess.run(cmd.split(), capture_output=True, text=True)
         print(result.stdout)
         print(result.stderr)
-    
     except Exception as e:
         print(e)
     
@@ -231,9 +230,9 @@ if __name__ == '__main__':
             neg_train, neg_test = train[train[train.columns[-1]] == 0], test[test[test.columns[-1]] == 0]
             
             # Save subsets for SPRINT to read from...for predicting interactions
-            pos_train.to_csv(RESULTS_DIR + output + '_pos_train_fold-' + str(fold) + '.txt', sep=' ', header=None, index=False)
-            pos_test.to_csv(RESULTS_DIR + output + '_pos_test_fold-' + str(fold) + '.txt', sep=' ', header=None, index=False)
-            neg_test.to_csv(RESULTS_DIR + output + '_neg_test_fold-' + str(fold) + '.txt', sep=' ', header=None, index=False)
+            pos_train.to_csv(RESULTS_DIR + output + '_pos_train_fold-' + str(fold) + '.txt', sep=' ', columns=[0,1], header=None, index=False)
+            pos_test.to_csv(RESULTS_DIR + output + '_pos_test_fold-' + str(fold) + '.txt', sep=' ', columns=[0,1], header=None, index=False)
+            neg_test.to_csv(RESULTS_DIR + output + '_neg_test_fold-' + str(fold) + '.txt', sep=' ', columns=[0,1], header=None, index=False)
             
             # Run predict interactions for k-fold
             predict_interactions(args.sprint, args.protein_sequences, args.hsp_file, thc=args.hc_threshold, 
