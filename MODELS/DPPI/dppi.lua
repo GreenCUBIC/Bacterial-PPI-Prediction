@@ -23,7 +23,7 @@
         Deep learning CNN approach to binary classification of protein-protein interaction prediction.
 
 ]]
-
+-- run using NVIDIA P100 Pascal GPU
 --------------------------DPPI------------------------------------------------------
 require 'torch'
 require 'cutorch'
@@ -53,6 +53,7 @@ cmd:option('-seed', 1, 'manual seed')
 cmd:option('-dataDir', './', 'directory path for data files')
 
 -- data:
+cmd:option('-pssmDir', '', 'directory path for data files')
 cmd:option('-train','','data to use for training')
 cmd:option('-test','','data to use for testing')
 
@@ -77,7 +78,7 @@ end
 cutorch.setDevice(opt.device)
 
 -- The string used to save the model and logs
-saveName = string.format("%s-%s-%s", opt.string, opt.train, opt.test)
+saveName = string.format("%s_%s-%s", opt.string, opt.train, opt.test)
 
 function file_exists(name)
    local f=io.open(name,"r")
@@ -218,10 +219,14 @@ function prep_data( file )
 
   local ppFeature = {}
   local pNumber = {}
-
+  if opt.pssmDir ~= '' then
+    pssms = opt.pssmDir
+  else
+    pssms = opt.dataDir..file..'/'
+  end
   for i=1, #proteinString do
   
-    local fileName = opt.dataDir..file..'/'..proteinString[i][1]
+    local fileName = pssms..proteinString[i][1]
     if file_exists( fileName ) then
       local proFile = Csv( fileName, 'r', '\t')
       local profile = proFile:readall()
@@ -264,7 +269,7 @@ end
 function prep_cv_data( file, k )
 
   --load pairs
-  local prot_pairs = torch.load( 'Data/'..file..k..'_labels.dat' )
+  local prot_pairs = torch.load( 'Data/'..file..(k-1)..'_labels.dat' )
   --isolate only unique proteins found in pairs
   local proteins = {}
   for p=1, #prot_pairs do
@@ -300,7 +305,11 @@ function prep_cv_data( file, k )
   local pNumber = {}
 
   for i=1, #proteins do
-    local fileName = opt.dataDir..folderName..'/'..proteins[i]
+    if opt.pssmDir == '' then
+      local fileName = opt.dataDir..folderName..'/'..proteins[i]
+    else
+      local fileName = opt.pssmDir..proteins[i]
+    end
     if file_exists( fileName ) then
       local proFile = Csv( fileName, 'r', '\t')
       local profile = proFile:readall()
@@ -334,8 +343,8 @@ function prep_cv_data( file, k )
 
   proteinFile:close()
   collectgarbage()
-  torch.save('Data/'..file..k..'_profile_crop_'..crop_size..'.t7', ppFeature )
-  torch.save('Data/'..file..k..'_number_crop_'..crop_size..'.t7', pNumber )
+  torch.save('Data/'..file..(k-1)..'_profile_crop_'..crop_size..'.t7', ppFeature )
+  torch.save('Data/'..file..(k-1)..'_number_crop_'..crop_size..'.t7', pNumber )
 
   return pNumber, ppFeature
 end
@@ -409,20 +418,89 @@ function pair_seq_load_batch( Data, index, feature )
 end
 
 function get_kfold_split( Data , k )
---need to make stratified
+  --get positives and negatives
+  local pos = {}
+  local neg = {}
+  for i=1, #Data do
+    if (Data[i][3] == '1') then
+      pos[i] = Data[i]
+    elseif (Data[i][3] == '0') then
+      neg[i - #pos] = Data[i]
+    end
+  end
+  --shuffle to randomize data in each class for this run
+  local shuffle_pos = torch.randperm(#pos)
+  local shuffle_neg = torch.randperm(#neg)
+  --get sizes and indices of subsets
+  local train_k_pos = {}
+  local test_k_pos = {}
+  local train_k_neg = {}
+  local test_k_neg = {}
+  local ind_pos = torch.Tensor(shuffle_pos)
+  local ind_neg = torch.Tensor(shuffle_neg)
+  local train_ind_pos
+  local train_ind_neg
+  local test_ind_pos
+  local test_ind_neg
+  --split data indices into k-fold subsets
+  for i=1, k do
+    if i%2 == 0 then
+      train_ind_pos = torch.split(ind_pos, math.floor(ind_pos:size()[1]*(1.0 - (1.0/k))))[1]
+      train_ind_neg = torch.split(ind_neg, math.floor(ind_neg:size()[1]*(1.0 - (1.0/k)) + 0.5))[1]
+      test_ind_pos = torch.split(ind_pos, math.floor(ind_pos:size()[1]*(1.0 - (1.0/k))))[2]
+      test_ind_neg = torch.split(ind_neg, math.floor(ind_neg:size()[1]*(1.0 - (1.0/k)) + 0.5))[2]
+    else
+      train_ind_pos = torch.split(ind_pos, math.floor(ind_pos:size()[1]*(1.0 - (1.0/k)) + 0.5))[1]
+      train_ind_neg = torch.split(ind_neg, math.floor(ind_neg:size()[1]*(1.0 - (1.0/k))))[1]
+      test_ind_pos = torch.split(ind_pos, math.floor(ind_pos:size()[1]*(1.0 - (1.0/k)) + 0.5))[2]
+      test_ind_neg = torch.split(ind_neg, math.floor(ind_neg:size()[1]*(1.0 - (1.0/k))))[2]
+    end
+    train_k_pos[i] = train_ind_pos
+    train_k_neg[i] = train_ind_neg
+    test_k_pos[i] = test_ind_pos
+    test_k_neg[i] = test_ind_neg
+    ind_pos = torch.cat(test_ind_pos, train_ind_pos)
+    ind_neg = torch.cat(test_ind_neg, train_ind_neg)
+  end
+  --Map PPIs to indices for each subset
   local train = {}
   local test = {}
   for i=1, k do
     train[i] = {}
     test[i] = {}
-    local shuffle = torch.randperm(#Data)
-    local train_size = math.floor(shuffle:size()[1]*(1.0 - (1.0/k)) + 0.5)
-    local test_size = math.floor(shuffle:size()[1]*(1.0/k) + 0.5)
-    for j=1, train_size do
-      train[i][j] = Data[ shuffle[j] ]
+    local train_pos = {}
+    local train_neg = {}
+    local test_pos = {}
+    local test_neg = {}
+    --add positives test
+    for j=1, test_k_pos[i]:size()[1] do
+      test_pos[j] = pos[shuffle_pos[test_k_pos[i][j]]]
     end
-    for j=train_size+1, #Data  do
-      test[i][j-train_size] = Data[ shuffle[j] ]
+    --add negatives test
+    for j=1, test_k_neg[i]:size()[1] do
+      test_neg[j] = neg[shuffle_neg[test_k_neg[i][j]]]
+    end
+    --combine
+    for n=1, #test_pos do
+      test[i][#test[i]+1] = test_pos[n]
+    end
+    for n=1, #test_neg do
+      test[i][#test[i]+1] = test_neg[n]
+    end
+    --add positives train
+    for j=1, train_k_pos[i]:size()[1] do
+      train_pos[j] = pos[shuffle_pos[train_k_pos[i][j]]]
+    end
+    --add negatives train
+    for j=1, train_k_neg[i]:size()[1] do
+      train_neg[j] = neg[shuffle_neg[train_k_neg[i][j]]]
+    end
+    --combine
+    for n=1, #train_pos do
+      train[i][#train[i]+1] = train_pos[n]
+    end
+    for n=1, #train_neg do
+      train[i][#train[i]+1] = train_neg[n]
     end
   end
   return train, test
@@ -523,7 +601,7 @@ function BNInit(name)
 end
 ----------------------MODEL-------------------------------------------------
 ----------------------TRAIN-------------------------------------------------
-function train(epoch, Data )
+function train_model(epoch, Data )
 
   -- choosing the optimization method and hyper-parameters
   if opt.optimization == 'SGD' then
@@ -637,50 +715,13 @@ function recalculate_crop( v_score, v_labels, Data, k )
     predictions[i] = Data.org_data[i][1]..'\t'..Data.org_data[i][2]..'\t'..tonumber(string.format("%.6f", myscore1))
   end
   
-  pfile = io.open('Results/prediction'..saveName..'_fold-'..k..'.txt', 'w')
+  pfile = io.open('Results/predictions'..saveName..'_fold-'..(k-1)..'.txt', 'w')
   for p=1, #predictions do
       pfile:write(predictions[p]..'\n')
   end
   pfile:close()
   
   return new_score, new_labels
-end
-
--- Calculates the Mean Average Precision (MAP)
-function MAP (score, truth)
-  local x,ind,map,P,TP,FP,N  
-  x, ind = torch.sort(score, 1, true)
-  if num_outputs == 1 then
-    truth:add(1):div(2)
-  end
-  
-  P = torch.sum( truth,1 )
-  local precision = torch.Tensor(score:size(1),1)
-  local recall = torch.Tensor(score:size(1),1)
-  local specificity = torch.Tensor(score:size(1),1)
-
-  my_error = 0
-  map = 0
-  for c=1, score:size(2) do
-    TP = 0
-    FP = 0
-    FN = 0
-
-    N = score:size(1) - P[1][c] 
-    for i=1, score:size(1) do  
-      TP = TP + truth[ind[i][c]][c]
-      FP = FP + (1 - truth[ind[i][c]][c] )      
-
-      precision[i][1] = TP / (FP + TP)
-      recall[i][1] = TP / P[1][c] 
-      specificity[i][1] = FP / N  
-      
-      map = map + ( truth[ind[i][c]][c] * TP / ( P[1][c] * ( FP + TP ) ) )
-    end
-  end
-  print("error ", my_error)
-  map = map / ( score:size(2) ) 
-  return map, precision, recall, specificity
 end
 
 function make_prediction (Data, feature, k)
@@ -751,6 +792,8 @@ function get_performance(scores, truths)
   return tp, fp, tn, fn, total_pos, total_neg
 end
 
+-- Improper
+--[[
 function get_auc(scores, truths)
   local tp = 0
   local fp = 0 
@@ -807,17 +850,18 @@ function get_auc(scores, truths)
   
   return auc_roc, auc_pr
 end
+]]
 ------------------------PREDICT & EVALUATE---------------------------------
 
 function cv_files_exist( file, k_fold )
   all_found = 0
   for k=1, k_fold do
-    if file_exists(file..'_train_fold-'..k..'_labels.dat') == true then all_found = all_found + 1 end
-    if file_exists(file..'_test_fold-'..k..'_labels.dat') == true then all_found = all_found + 1 end
-    if file_exists(file..'_train_fold-'..k..'_profile_crop_'..opt.cropLength..'.t7') == true then all_found = all_found + 1 end
-    if file_exists(file..'_test_fold-'..k..'_profile_crop_'..opt.cropLength..'.t7') == true then all_found = all_found + 1 end
-    if file_exists(file..'_train_fold-'..k..'_number_crop_'..opt.cropLength..'.t7') == true then all_found = all_found + 1 end
-    if file_exists(file..'_test_fold-'..k..'_number_crop_'..opt.cropLength..'.t7') == true then all_found = all_found + 1 end
+    if file_exists(file..'_train_fold-'..(k-1)..'_labels.dat') == true then all_found = all_found + 1 end
+    if file_exists(file..'_test_fold-'..(k-1)..'_labels.dat') == true then all_found = all_found + 1 end
+    if file_exists(file..'_train_fold-'..(k-1)..'_profile_crop_'..opt.cropLength..'.t7') == true then all_found = all_found + 1 end
+    if file_exists(file..'_test_fold-'..(k-1)..'_profile_crop_'..opt.cropLength..'.t7') == true then all_found = all_found + 1 end
+    if file_exists(file..'_train_fold-'..(k-1)..'_number_crop_'..opt.cropLength..'.t7') == true then all_found = all_found + 1 end
+    if file_exists(file..'_test_fold-'..(k-1)..'_number_crop_'..opt.cropLength..'.t7') == true then all_found = all_found + 1 end
   end
   if all_found/6 == k_fold then
     return true
@@ -849,8 +893,8 @@ if opt.train == opt.test then
     training, testing = get_kfold_split( train_ppi, opt.kfold )
     --save k-fold subsets
     for k=1, opt.kfold do
-      torch.save( 'Data/'..opt.train..'_train_fold-'..k..'_labels.dat', training[k] )
-      torch.save( 'Data/'..opt.test..'_test_fold-'..k..'_labels.dat', testing[k] )
+      torch.save( 'Data/'..opt.train..'_train_fold-'..(k-1)..'_labels.dat', training[k] )
+      torch.save( 'Data/'..opt.test..'_test_fold-'..(k-1)..'_labels.dat', testing[k] )
     end
   end
 else
@@ -918,7 +962,7 @@ else
   else
     print('creating training crop files...')
     pNumber, ppFeature = prep_data(opt.train)
-  end 
+  end
   if file_exists(opt.dataDir..opt.test..'_profile_crop_'..crop_size..'.t7') and file_exists(opt.dataDir..opt.test..'_number_crop_'..crop_size..'.t7') then
     print(opt.test..' crop files already found')
   else
@@ -943,19 +987,19 @@ if opt.crop then
     avg_specificity = {}
     avg_f1 = {}
     avg_mcc = {}
-    avg_roc = {}
-    avg_pr = {}
+    --avg_roc = {}
+    --avg_pr = {}
     for k=1, opt.kfold do
     -------------- LOAD DATA CROSS-VALIDATION -----------
-      pNumber = torch.load( 'Data/'..opt.train..'_train_fold-'..k..'_number_crop_'..opt.cropLength..'.t7' )
-      test_pNumber = torch.load( 'Data/'..opt.test..'_test_fold-'..k..'_number_crop_'..opt.cropLength..'.t7' )
-      trainData[k] = pair_crop_load('Data/'..opt.train..'_train_fold-'..k..'_labels.dat',10, pNumber )
-      print(opt.train..' fold - '..k..' training on '..#trainData[k].org_data..' interactions')
-      testData[k] = pair_crop_load('Data/'..opt.test..'_test_fold-'..k..'_labels.dat',10, test_pNumber )
-      print(opt.test..' fold - '..k..' testing on '..#testData[k].org_data..' interactions')
+      pNumber = torch.load( 'Data/'..opt.train..'_train_fold-'..(k-1)..'_number_crop_'..opt.cropLength..'.t7' )
+      test_pNumber = torch.load( 'Data/'..opt.test..'_test_fold-'..(k-1)..'_number_crop_'..opt.cropLength..'.t7' )
+      trainData[k] = pair_crop_load('Data/'..opt.train..'_train_fold-'..(k-1)..'_labels.dat',10, pNumber )
+      print(opt.train..' fold - '..(k-1)..' training on '..#trainData[k].org_data..' interactions')
+      testData[k] = pair_crop_load('Data/'..opt.test..'_test_fold-'..(k-1)..'_labels.dat',10, test_pNumber )
+      print(opt.test..' fold - '..(k-1)..' testing on '..#testData[k].org_data..' interactions')
       
-      train_feature = torch.load( 'Data/'..opt.train..'_train_fold-'..k..'_profile_crop_'..opt.cropLength..'.t7' )
-      test_feature = torch.load( 'Data/'..opt.test..'_test_fold-'..k..'_profile_crop_'..opt.cropLength..'.t7' )
+      train_feature = torch.load( 'Data/'..opt.train..'_train_fold-'..(k-1)..'_profile_crop_'..opt.cropLength..'.t7' )
+      test_feature = torch.load( 'Data/'..opt.test..'_test_fold-'..(k-1)..'_profile_crop_'..opt.cropLength..'.t7' )
       num_features = train_feature[ trainData[k].data[1][1] ]:size(2)
       num_outputs = 1
       
@@ -980,15 +1024,15 @@ if opt.crop then
       model:cuda()
       criterion:cuda()
     
-      print('########## TRAINING - fold '..k..' ##########')
+      print('########## TRAINING - fold '..(k-1)..' ##########')
       for i=1, opt.epochs do
-          train( i, trainData[k] )
+          train_model( i, trainData[k] )
       end 
     --------------- TEST AND EVALUATE ----------------------------- 
-      print('########## TESTING - fold '..k..' ##########')
+      print('########## TESTING - fold '..(k-1)..' ##########')
       val_scores, val_labels = make_prediction(testData[k], test_feature, k)
         
-      print('########## EVALUATING - fold '..k..' ##########')
+      print('########## EVALUATING - fold '..(k-1)..' ##########')
       tp, fp, tn, fn, total_pos, total_neg = get_performance(val_scores, val_labels)
       print('\ntp = '..tp..'\ntn = '..tn..'\nfp = '..fp..'\nfn = '..fn..'\n')
     
@@ -999,7 +1043,7 @@ if opt.crop then
       f1 = 2. * precision * recall / (precision + recall + 1e-06)
       mcc = (tp * tn - fp * fn) / (((tp + fp + 1e-06) * (tp + fn + 1e-06) * (fp + tn + 1e-06) * (tn + fn + 1e-06)) ^ 0.5)
       
-      auc_roc, auc_pr = get_auc(val_scores, val_labels)
+      --auc_roc, auc_pr = get_auc(val_scores, val_labels)
         
       avg_accuracy[k] = accuracy
       avg_precision[k] = precision
@@ -1007,11 +1051,11 @@ if opt.crop then
       avg_specificity[k] = specificity
       avg_f1[k] = f1
       avg_mcc[k] = mcc
-      avg_roc[k] = auc_roc
-      avg_pr[k] = auc_pr
-      print('Fold-'..k..' performance:')
+      --avg_roc[k] = auc_roc
+      --avg_pr[k] = auc_pr
+      print('Fold-'..(k-1)..' performance:')
       print('accuracy = '.. accuracy..'\nprecision = '..precision..'\nrecall = '..recall..'\nspecificity = '..specificity..'\nf1 = '..f1..'\nmcc = '..mcc..'\n')
-      print('auc_roc = '..auc_roc..'\nauc_pr = '..auc_pr..'\n')
+      --print('auc_roc = '..auc_roc..'\nauc_pr = '..auc_pr..'\n')
       print('time = '..os.time()-t_start..'\n')
     end
     
@@ -1021,8 +1065,8 @@ if opt.crop then
     avg_specificity = torch.Tensor(avg_specificity)
     avg_f1 = torch.Tensor(avg_f1)
     avg_mcc = torch.Tensor(avg_mcc)
-    avg_roc = torch.Tensor(avg_roc)
-    avg_pr = torch.Tensor(avg_pr)
+    --avg_roc = torch.Tensor(avg_roc)
+    --avg_pr = torch.Tensor(avg_pr)
     
     performance = 'accuracy='..torch.mean(avg_accuracy)..' (+/-'..torch.std(avg_accuracy)..')'..
     '\nprecision='..torch.mean(avg_precision)..' (+/-'..torch.std(avg_precision)..')'..
@@ -1030,8 +1074,8 @@ if opt.crop then
     '\nspecificity='..torch.mean(avg_specificity)..' (+/-'..torch.std(avg_specificity)..')'..
     '\nf1='..torch.mean(avg_f1)..' (+/-'..torch.std(avg_f1)..')'..
     '\nmcc='..torch.mean(avg_mcc)..' (+/-'..torch.std(avg_mcc)..')'..
-    '\nauc_roc='..torch.mean(avg_roc)..' (+/-'..torch.std(avg_roc)..')'..
-    '\nauc_pr='..torch.mean(avg_pr)..' (+/-'..torch.std(avg_pr)..')'..'\n'..
+    --'\nauc_roc='..torch.mean(avg_roc)..' (+/-'..torch.std(avg_roc)..')'..
+    --'\nauc_pr='..torch.mean(avg_pr)..' (+/-'..torch.std(avg_pr)..')'..'\n'..
     '\ntime = '..os.time()-t_start..'\n'
     
     print('Average Performance:')
@@ -1084,7 +1128,7 @@ if opt.crop then
     
       print('########## TRAINING ##########')
       for i=1, opt.epochs do
-        train( i, trainData )
+        train_model( i, trainData )
       end
       if opt.saveModel then
         torch.save( '/Models/'..saveName..'DPPI_model.t7', model )
@@ -1107,13 +1151,14 @@ if opt.crop then
     f1 = 2. * precision * recall / (precision + recall + 1e-06)
     mcc = (tp * tn - fp * fn) / (((tp + fp + 1e-06) * (tp + fn + 1e-06) * (fp + tn + 1e-06) * (tn + fn + 1e-06)) ^ 0.5)
     
-    auc_roc, auc_pr = get_auc(val_scores, val_labels)
+    --auc_roc, auc_pr = get_auc(val_scores, val_labels)
     
     performance = 'accuracy='.. accuracy..'\nprecision='..precision..'\nrecall='..recall..'\nspecificity='..specificity..'\nf1='..f1..'\nmcc='..mcc..
-    '\nauc_roc='..auc_roc..'\nauc_pr='..auc_pr..'\ntime = '..os.time()-t_start..'\n'
+    --'\nauc_roc='..auc_roc..'\nauc_pr='..auc_pr..
+    '\ntime = '..os.time()-t_start..'\n'
     print(performance)
     --write results to file
-    metrics = io.open('Results/results_'..saveName..'.txt', 'w')
+    metrics = io.open('Results/results'..saveName..'.txt', 'w')
     metrics:write(performance)
     metrics:close()
   --========================= END ===========================
