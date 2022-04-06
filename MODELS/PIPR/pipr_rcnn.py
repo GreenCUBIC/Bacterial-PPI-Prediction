@@ -18,7 +18,7 @@
     Main modifications include a change of command-line argument usage for execution and a choice of cross-validation 
     or a single train/test split. Prediction probabilities of each interaction in test data are also saved to file.
     Author: Eric Arezza
-    Last Updated: March 9, 2021
+    Last Updated: December 29, 2021
     
     Description:
         RCNN approach to binary classification of protein-protein interaction prediction.
@@ -56,56 +56,35 @@ if 'embeddings' not in sys.path:
 # Description of command-line usage
 describe_help = 'CUDA_VISIBLE_DEVICES=0 python pipr_rcnn.py sequencesFile.fasta trainFile.tsv testFile.tsv'
 parser = argparse.ArgumentParser(description=describe_help)
-parser.add_argument('sequences', help='Path to file containing protein sequences (.fasta)', type=str, nargs=1)
-parser.add_argument('train', help='Path to file containing binary protein interactions for training (.tsv)', type=str, nargs=1)
-parser.add_argument('test', help='Path to file containing binary protein interactions for testing (.tsv)', type=str, nargs=1)
-parser.add_argument('-r','--results', help='Path to file to store results', type=str, nargs=1, required=False)
-parser.add_argument('-l', '--label_index', help='Label index (int)', type=int, nargs=1, required=False)
+parser.add_argument('sequences', help='Path to file containing protein sequences (.fasta)', type=str)
+parser.add_argument('train', help='Path to file containing binary protein interactions for training (.tsv)', type=str)
+parser.add_argument('test', help='Path to file containing binary protein interactions for testing (.tsv)', type=str)
+parser.add_argument('-r','--results', help='Optional name to store resulting files', type=str)
+parser.add_argument('-l', '--label_index', help='Label index (int)', type=int, default=2)
 parser.add_argument('-m', '--mbedding', help='Embedding (int), 0=embeddings/default_onehot.txt, 1=embeddings/string_vec5.txt, 2=embeddings/CTCoding_onehot.txt, 3=embeddings/vec7_CTC.txt', 
-                    type=int, nargs=1, required=False, choices=[0,1,2,3])
-parser.add_argument('-d', '--dimensions', help='Hidden dimensions (int)', type=int, nargs=1, required=False)
-parser.add_argument('-e', '--epochs', help='Epochs (int)', type=int, nargs=1, required=False)
-parser.add_argument('-a', '--seq_size', help='Amino acids/sequence length (int)', type=int, nargs=1, required=False)
+                    type=int, choices=[0,1,2,3], default=3)
+parser.add_argument('-d', '--dimensions', help='Hidden dimensions (int)', type=int, default=50)
+parser.add_argument('-b', '--batch_size', help='Batch size (int)', type=int, default=256)
+parser.add_argument('-e', '--epochs', help='Epochs (int)', type=int, default=100)
+parser.add_argument('-learning_rate', '--learning_rate', help='Learning rate (float)', type=float, default=0.001)
+parser.add_argument('-a', '--seq_size', help='Amino acids/sequence length (int)', type=int, default=2000)
 parser.add_argument('-save', '--saveModel', help='Save model', action='store_true', default=False)
-parser.add_argument('-load','--loadModel', help='Path to pre-trained model', default='', type=str, nargs=1, required=False)
+parser.add_argument('-load','--loadModel', help='Path to pre-trained model', type=str)
 parser.add_argument('-c', '--cpu', dest='cpu', help='Use only CPU', action='store_true', default=False)
-parser.add_argument('-k', '--k_folds', help='Number of k-folds when cross-validating (int)', type=int, nargs=1, required=False)
-#parser.set_defaults(results=os.getcwd()+'/results/'+datetime.now().strftime("%d-%m-%Y/")+datetime.now().strftime("%H-%M-%S-results.txt"),
-#                    label_index=2, mbedding=0, dimensions=25, epochs=50)
+parser.add_argument('-k', '--k_folds', help='Number of k-folds when cross-validating (int)', type=int, default=5)
 args = parser.parse_args()
+
 # Set defaults for command-line arguments
-if args.label_index is None:
-    label_index = 2
-else:
-    label_index = args.label_index[0]
-if args.mbedding is None:
-    use_emb = 3
-else:
-    use_emb = args.mbedding[0]
-if args.dimensions is None:
-    hidden_dim = 50
-else:
-    hidden_dim = args.dimensions[0]
-if args.epochs is None:
-    n_epochs = 100
-else:
-    n_epochs = args.epochs[0]
-if args.seq_size is None:
-    SEQ_SIZE = 2000
-else:
-    SEQ_SIZE = args.seq_size[0]
-if args.loadModel == '':
-    pretrained = None
-else:
-    pretrained = args.loadModel[0]
-if args.k_folds is None:
-    K_FOLDS = 5
-else:
-    K_FOLDS = args.k_folds[0]
+label_index = args.label_index
+use_emb = args.mbedding
+hidden_dim = args.dimensions
+n_epochs = args.epochs
+SEQ_SIZE = args.seq_size
+pretrained = args.loadModel
+K_FOLDS = args.k_folds
 
-
-TRAIN_FILE = args.train[0]
-TEST_FILE = args.test[0]
+TRAIN_FILE = args.train
+TEST_FILE = args.test
 CROSS_VALIDATE = False
 if TRAIN_FILE == TEST_FILE:
     CROSS_VALIDATE = True
@@ -114,9 +93,9 @@ if args.results is None:
     #rst_file = os.getcwd()+'/Results/results_'+datetime.now().strftime("%d-%m-%Y_")+datetime.now().strftime("%H-%M-%S.txt")    
     rst_file = os.getcwd()+'/Results/results_' + TRAIN_FILE.split('/')[-1].replace('.tsv', '_') + TEST_FILE.split('/')[-1].replace('.tsv', '.txt')
 else:
-    rst_file = args.results
+    rst_file = os.getcwd()+'/Results/results_' + args.results
 
-ID2SEQ_FILE = args.sequences[0]
+ID2SEQ_FILE = args.sequences
 
 EMB_FILES = ['embeddings/default_onehot.txt', 'embeddings/string_vec5.txt', 'embeddings/CTCoding_onehot.txt', 'embeddings/vec7_CTC.txt']
 SEQ2T = s2t(EMB_FILES[use_emb])
@@ -128,6 +107,7 @@ DIM = SEQ2T.dim
 #SEQ_SIZE = 2000
 CLASS_MAP = {'0':1,'1':0}
 print("Class map:", CLASS_MAP)
+print(args)
 
 def get_session(gpu_fraction=0.5):
     '''Assume that you have 6GB of GPU memory and want to allocate ~3GB'''
@@ -383,7 +363,7 @@ if __name__ == "__main__":
         
     # Train and test model
     num_hit = num_total = num_pos = num_true_pos = num_false_pos = num_true_neg = num_false_neg = 0.
-    batch_size1 = 256
+    batch_size1 = args.batch_size
     cv = 0
     for train, test in train_test:
         
@@ -392,10 +372,10 @@ if __name__ == "__main__":
         else:
             merge_model = None
             merge_model = build_model()
-            adam = Adam(lr=0.001, amsgrad=True, epsilon=1e-6)
-            rms = RMSprop(lr=0.001)
+            adam = Adam(lr=args.learning_rate, amsgrad=True, epsilon=1e-6)
+            rms = RMSprop(lr=args.learning_rate)
             merge_model.compile(optimizer=rms, loss='categorical_crossentropy', metrics=['accuracy'])
-            merge_model.fit([seq_tensor[seq_index1[train]], seq_tensor[seq_index2[train]]], class_labels[train], batch_size=batch_size1, epochs=n_epochs)
+            hist = merge_model.fit([seq_tensor[seq_index1[train]], seq_tensor[seq_index2[train]]], class_labels[train], batch_size=batch_size1, epochs=n_epochs)
             
         if not CROSS_VALIDATE and args.saveModel:
             pickle.dump(merge_model, open(os.getcwd()+'/Models/' + TRAIN_FILE.split('/')[-1].replace('.tsv', '_PIPR.model'), 'wb'))
@@ -405,12 +385,17 @@ if __name__ == "__main__":
         if not CROSS_VALIDATE:
             # Save interaction probability results
             prob_results = get_test_results(id2_aid_test, raw_data, test, class_labels, pred)
-            np.savetxt(os.getcwd()+'/Results/predictions_' + TRAIN_FILE.split('/')[-1].replace('.tsv', '_') + TEST_FILE.split('/')[-1].replace('.tsv', '.txt'), prob_results, fmt='%s', delimiter='\n')
+            if args.results is None:
+                np.savetxt(os.getcwd()+'/Results/predictions_' + TRAIN_FILE.split('/')[-1].replace('.tsv', '_') + TEST_FILE.split('/')[-1].replace('.tsv', '.txt'), prob_results, fmt='%s', delimiter='\n')
+            else:
+                np.savetxt(rst_file.replace('results', 'predictions'), prob_results, fmt='%s', delimiter='\n')
         else:
             # Save interaction probability results
             prob_results = get_test_results(id2_aid, raw_data, test, class_labels, pred)
-            np.savetxt(os.getcwd()+'/Results/predictions_' + TRAIN_FILE.split('/')[-1].replace('.tsv', '_') + TEST_FILE.split('/')[-1].replace('.tsv', '_') + 'fold-' + str(cv) + '.txt', prob_results, fmt='%s', delimiter='\n')
-        
+            if args.results is None:
+                np.savetxt(os.getcwd()+'/Results/predictions_' + TRAIN_FILE.split('/')[-1].replace('.tsv', '_') + TEST_FILE.split('/')[-1].replace('.tsv', '_') + 'fold-' + str(cv) + '.txt', prob_results, fmt='%s', delimiter='\n')
+            else:
+                np.savetxt(rst_file.replace('results', 'predictions').split('.')[0] + '_fold-' + str(cv) + '.txt', prob_results, fmt='%s', delimiter='\n')
         try:
             for i in range(len(class_labels[test])):        
                 num_total += 1
