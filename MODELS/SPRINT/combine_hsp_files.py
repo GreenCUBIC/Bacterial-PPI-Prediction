@@ -56,7 +56,12 @@ if __name__ == '__main__':
     
     # Group all hsps found for all pairs from all files
     print('Grouping HSPs...')
-    hsp = hsp.explode(hsp.columns[-1], ignore_index=True)
+    #hsp = hsp.explode(hsp.columns[-1], ignore_index=True)
+    #newvalues = np.dstack((np.repeat(hsp[0].values, list(map(len, hsp[1].values))), np.concatenate(hsp[1].values)))
+    hsp = pd.DataFrame(data=np.dstack((np.repeat(hsp[0].values, list(map(len, hsp[1].values))), np.concatenate(hsp[1].values)))[0], columns=hsp.columns)
+    #hsp = pd.DataFrame({0:hsp[0].repeat(hsp[1].str.len()), 1:np.concatenate(hsp[1].values)}).reset_index(drop=True)
+    #hsp = hsp.reindex(hsp.index.repeat(hsp[1].str.len())).assign(B=np.concatenate(hsp[1].values))
+    
     group = hsp.groupby([hsp.columns[0]])[hsp.columns[1]].apply(lambda x: x.unique()).reset_index()
     
     # Write HSPs to file
