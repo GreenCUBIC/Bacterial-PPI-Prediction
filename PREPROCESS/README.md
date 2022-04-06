@@ -88,7 +88,8 @@ ___
                     5 (DEFAULT): saves data subsets under CV_SET/ including formatted data as per -m option
                     0 or 1: does not create k-fold subsets
                 -a <flag> generates all-to-all PPIs, positively labelled, for proteins in the final dataset (BE MINDFUL OF HARDDRIVE/STORAGE)
-
+                -pm <int> creates number of Park&Marcotte sets from final dataset for evaluations, default is 0)
+               
 # HPIDB Dataset Preprocessing
 
 After downloading and unzipping a [HPIDB](https://hpidb.igbb.msstate.edu/index.html) file, run the following for example:  
