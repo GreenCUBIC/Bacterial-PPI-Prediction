@@ -5,4 +5,6 @@ Provides implementation for:
 - running state-of-the-art PPI prediction models  
 - evaluating cross-validated PPI prediction results
   
+![alt text](RP-CME_flowchart.png)  
+
 contact: ericarezza@cmail.carleton.ca  
