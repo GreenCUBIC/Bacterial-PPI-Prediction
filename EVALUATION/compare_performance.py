@@ -399,6 +399,7 @@ if __name__ == '__main__':
     log = open("%s%s.log"%(args.results, args.name), "a")
     sys.stdout = log
     t_start = time.time()
+    
     scores_labels_mapping = {}
     for i in range(0, len(args.scores)):
         if len(args.labels) == 1:
@@ -415,7 +416,13 @@ if __name__ == '__main__':
     names = []
     for s, l in scores_labels_mapping.items():
         performance, overall_curve, interp_precision, interp_tpr, pr_auc, roc_auc = get_metrics(s, l, args.delta)
-        name = ''.join([ i.replace('/', '') for i in s.split('RESULTS')[1:] ])
+        #name = ''.join([ i.replace('/', '') for i in s.split('RESULTS')[1:] ])
+        if os.path.isdir(s):
+            if s[-1] != '/':
+                s = s + '/'
+            name = s.split('/')[-2]
+        else:
+            name = s.split('/')[-1]
         names.append(name)
         performances[name] = performance
         overall_curves[name] = overall_curve
